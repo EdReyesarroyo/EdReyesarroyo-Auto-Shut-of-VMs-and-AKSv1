@@ -1,0 +1,43 @@
+##Dependencies on Automation Account must addressed first below is just the runbook (e.g. identity, modules).
+# Authenticate with Azure using a Managed Identity and specific account
+Connect-AzAccount -Identity -Environment AzureUSGovernment
+
+# Define tag and tag value to filter resources
+$tag = "vm-auto-shutdown"
+$tagValue = "false"
+
+# Retrieve and iterate through management groups to find specific subscriptions
+$responses = Get-AzManagementGroup -GroupId ATN_Dev -Expand -Recurse
+$response = $responses.Children.Name
+Foreach ($res in $response) {
+    # Set context to the current subscription to manage resources within it
+    Set-AzContext -subscriptionid $res
+
+    # VMs: Get all VMs not having the specific tag or having a different tag value
+    $vmtags = Get-AzResource -ResourceType Microsoft.Compute/virtualMachines | Where-Object { $_.Tags.Keys -notcontains $tag -or $_.Tags[$tag] -ne $tagValue }
+    foreach ($vmtag in $vmtags) {
+        $vmtagname = $vmtag.Name
+        # Obtain VM status
+        $vms = Get-AzVM -Name $vmtagname -status
+        $VMName = $vms.Name
+        $VMstate = $vms.PowerState -eq "VM running"
+
+        # If VM is stopped, write a message, else stop the VM
+        if (!$VMstate) {
+            Write-output "$VMName is stopped"
+        } else {
+            Write-Output "Stopping the following server:"
+            Write-Output $VMName
+            $vms | Stop-AzVM -ErrorAction Stop -Force -NoWait
+        }
+    }
+    
+    # AKS Clusters: Find all AKS clusters not having the specific tag or having a different tag value
+    $aksClusters = Get-AzResource -ResourceType Microsoft.ContainerService/managedClusters | Where-Object { $_.Tags.Keys -notcontains $tag -or $_.Tags[$tag] -ne $tagValue }
+    foreach ($cluster in $aksClusters) {
+        $clusterName = $cluster.Name
+        # Optionally, you could scale down AKS clusters here, but typically, stopping individual nodes within AKS isn't directly supported.
+        # Custom logic based on requirements can be added, for instance, scaling down the node count or sending notifications.
+        Write-Output "AKS Cluster `$clusterName` might need manual scaling or stopping based on policies."
+    }
+}
